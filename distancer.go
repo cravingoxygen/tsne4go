@@ -4,6 +4,7 @@ package tsne4go
 type Distancer interface {
 	Len() int                  // Length of the collection
 	Distance(i, j int) float64 // Distance between items i and j of the collection
+	Get(i int) []float64
 }
 
 // A Distancer implemented for vectors of float64
@@ -26,4 +27,7 @@ func (vd VectorDistancer) Distance(i, j int) float64 {
 		dist += (vik - vjk) * (vik - vjk)
 	}
 	return dist
+}
+func (vd VectorDistancer) Get(i int) []float64 {
+	return vd[i]
 }

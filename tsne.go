@@ -5,12 +5,13 @@
 package tsne4go
 
 import (
+	_ "fmt"
 	"math"
 )
 
 const (
 	perplexity float64 = 30
-	epsilon    float64 = 10
+	epsilon    float64 = 5
 	// NbDims is the number of dimensions in the target space, typically 2 or 3.
 	NbDims int = 2
 )
@@ -26,6 +27,10 @@ type TSne struct {
 	Solution []Point // Solution is the list of points in the target space.
 	gains    []Point
 	ystep    []Point
+
+	PrevSolution []Point
+	prevDists    []float64 //x_i^t - x_i^{t+1} for all i
+
 	// Meta gives meta-information about each point, if needed.
 	// It is useful to associate, for instance, a label with each point.
 	// The algorithm dosen't take this information into consideration.
@@ -33,12 +38,15 @@ type TSne struct {
 	Meta []interface{}
 }
 
+//Yeah, this is ugly and we will rework it, I promise
+//Once my husband gives me a nice interface ;)
+
 // New takes a set of Distancer instances
 // and creates matrix P from them using gaussian kernel.
 // Meta-information is provided here.
 // It is under the programmer's responsibility :
 // it can be nil if no meta information is needed, or anything else.
-func New(x Distancer, meta []interface{}) *TSne {
+func New(x Distancer, xPrev Distancer, yPrev []Point, meta []interface{}) *TSne {
 	dists := xtod(x) // convert x to distances using gaussian kernel
 	length := x.Len()
 	tsne := &TSne{
@@ -48,8 +56,23 @@ func New(x Distancer, meta []interface{}) *TSne {
 		randn2d(length),       // Solution
 		fill2d(length, 1.0),   // gains
 		make([]Point, length), // ystep
+		yPrev, //Previous Solution
+		nil,   //Dists b/w previous x and current x
 		meta,
 	}
+	//Initialize ||x^t - x^{t+1}||^2 since it will be constant for whole tsne
+	if xPrev == nil || yPrev == nil {
+		return tsne
+	}
+
+	if xPrev.Len() != x.Len() {
+		panic("Number of high dim points must remain the same")
+	}
+	prevDists := make([]float64, xPrev.Len())
+	for i := 0; i < xPrev.Len(); i++ {
+		prevDists[i] = euclidSquared(x.Get(i), xPrev.Get(i))
+	}
+	tsne.prevDists = prevDists
 	return tsne
 }
 
@@ -130,6 +153,20 @@ func (tsne *TSne) costGrad(Y []Point) (cost float64, grad []Point) {
 			premult := 4 * (pmul*P[idx] - Q[idx]) * Qu[idx]
 			for d := 0; d < NbDims; d++ {
 				grad[i][d] += premult * (Y[i][d] - Y[j][d])
+			}
+		}
+	}
+
+	//Now we consider the second part of the cost function.
+	//Would probably be more efficient to add it to the previous set of calculations, but for now we have it separate
+	if tsne.PrevSolution != nil {
+		for i := 0; i < length; i++ {
+			//We need to divide prevDists by variance somehow, but we don't calculate that explicitly? So we ignore it for now...
+			yPrevDists := (Y[i][0]-tsne.PrevSolution[i][0])*(Y[i][0]-tsne.PrevSolution[i][0]) + (Y[i][1]-tsne.PrevSolution[i][1])*(Y[i][1]-tsne.PrevSolution[i][1])
+			//fmt.Printf("xDist: %v\t yDist: %v\tRatio: %v\n", yPrevDists, tsne.prevDists[i], tsne.prevDists[i]/yPrevDists)
+			cost += 1 - math.Exp(tsne.prevDists[i]-yPrevDists)
+			for d := 0; d < NbDims; d++ {
+				grad[i][d] += -2.0 * (Y[i][d] - tsne.PrevSolution[i][d]) * math.Exp(tsne.prevDists[i]/15.0-yPrevDists/2.0)
 			}
 		}
 	}

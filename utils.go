@@ -62,6 +62,18 @@ func xtod(x Distancer) []float64 {
 	return dists
 }
 
+func euclidSquared(x, y []float64) float64 {
+	sum := 0.0
+	if len(x) != len(y) {
+		panic("Mismatched vector dimensions")
+	}
+
+	for k := 0; k < len(x); k++ {
+		sum += (x[k] - y[k]) * (x[k] - y[k])
+	}
+	return sum
+}
+
 // "constants" for positive and negative infinity
 var (
 	inf     = math.Inf(1)
