@@ -81,15 +81,17 @@ var (
 	hTarget = math.Log(perplexity) // target entropy of distribution
 )
 
-// compute (p_{i|j} + p_{j|i})/(2n)
-func d2p(D []float64, perplexity, tol float64) []float64 {
+// compute (p_{i|j} + p_{j|i})/(2n) and the variances for each i
+func d2p(D []float64, perplexity, tol float64) (probas []float64, vars []float64) {
 	length := int(math.Sqrt(float64(len(D))))
 	pTemp := make([]float64, length*length) // temporary probability matrix
 	prow := make([]float64, length)         // a temporary storage compartment
+	vars = make([]float64, length)
+
 	for i := 0; i < length; i++ {
 		betamin := negInf
 		betamax := inf
-		beta := 1.0 // initial value of precision
+		beta := 1.0 // initial value of precision, beta = 1/(2 * omega^2)
 		const maxtries = 500
 		// perform binary search to find a suitable precision beta
 		// so that the entropy of the distribution is appropriate
@@ -142,16 +144,19 @@ func d2p(D []float64, perplexity, tol float64) []float64 {
 		for j := 0; j < length; j++ {
 			pTemp[i*length+j] = prow[j]
 		}
+
+		vars[i] = 1.0 / (2.0 * beta)
+
 	} // end loop over examples i
 	// symmetrize P and normalize it to sum to 1 over all ij
-	probas := make([]float64, length*length)
+	probas = make([]float64, length*length)
 	length2 := float64(length * 2)
 	for i := 0; i < length; i++ {
 		for j := 0; j < length; j++ {
 			probas[i*length+j] = math.Max((pTemp[i*length+j]+pTemp[j*length+i])/length2, 1e-100)
 		}
 	}
-	return probas
+	return probas, vars
 }
 
 func sign(x float64) int {
