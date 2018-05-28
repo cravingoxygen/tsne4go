@@ -5,7 +5,7 @@
 package tsne4go
 
 import (
-	_ "fmt"
+	"fmt"
 	"math"
 )
 
@@ -13,21 +13,39 @@ const (
 	perplexity float64 = 30
 	epsilon    float64 = 5
 	// NbDims is the number of dimensions in the target space, typically 2 or 3.
-	NbDims int = 2
+	NbDims      int = 2
+	K               = 1.0
+	alpha           = 10.0
+	almost_zero     = 0.000001
+)
+
+var (
+	sqrt_two = math.Sqrt(2.0)
 )
 
 // Point is a point's coordinates in the target space.
 type Point [NbDims]float64
 
+func copyPoints(src []Point) []Point {
+	res := make([]Point, len(src))
+
+	for k := range src {
+		for i := 0; i < NbDims; i++ {
+			res[k][i] = src[k][i]
+		}
+	}
+	return res
+}
+
 // TSne is the main structure.
 type TSne struct {
-	iter     int
-	length   int
-	probas   []float64
-	Solution []Point // Solution is the list of points in the target space.
-	gains    []Point
-	ystep    []Point
-
+	iter         int
+	length       int
+	probas       []float64
+	Solution     []Point // Solution is the list of points in the target space.
+	gains        []Point
+	ystep        []Point
+	vars         []float64 //Variances for each point
 	PrevSolution []Point
 	prevDists    []float64 //x_i^t - x_i^{t+1} for all i
 
@@ -49,17 +67,25 @@ type TSne struct {
 func New(x Distancer, xPrev Distancer, yPrev []Point, meta []interface{}) *TSne {
 	dists := xtod(x) // convert x to distances using gaussian kernel
 	length := x.Len()
+	probas, vars := d2p(dists, 30, 1e-4)
 	tsne := &TSne{
-		0,                     // iters
-		length,                //length
-		d2p(dists, 30, 1e-4),  // probas
-		randn2d(length),       // Solution
-		fill2d(length, 1.0),   // gains
-		make([]Point, length), // ystep
-		yPrev, //Previous Solution
-		nil,   //Dists b/w previous x and current x
-		meta,
+		iter:         0,                     // iters
+		length:       length,                //length
+		probas:       probas,                // probas
+		vars:         vars,                  //variances
+		gains:        fill2d(length, 1.0),   // gains
+		ystep:        make([]Point, length), // ystep
+		PrevSolution: yPrev,                 //Previous Solution
+		Meta:         meta,
 	}
+
+	//Don't randomly re-initialize if previous points are known
+	if yPrev != nil {
+		tsne.Solution = copyPoints(yPrev)
+	} else {
+		tsne.Solution = randn2d(length)
+	}
+
 	//Initialize ||x^t - x^{t+1}||^2 since it will be constant for whole tsne
 	if xPrev == nil || yPrev == nil {
 		return tsne
@@ -77,13 +103,19 @@ func New(x Distancer, xPrev Distancer, yPrev []Point, meta []interface{}) *TSne 
 }
 
 // Step performs a single step of optimization to improve the embedding.
-func (tsne *TSne) Step() float64 {
+func (tsne *TSne) Step(verbose bool) float64 {
 	tsne.iter++
 	length := tsne.length
-	cost, grad := tsne.costGrad(tsne.Solution) // evaluate gradient
+	cost, grad := tsne.costGrad(tsne.Solution, verbose) // evaluate gradient
+
+	if math.IsNaN(cost) || grad == nil {
+		panic("NaN")
+	}
+
 	// perform gradient step
 	var ymean Point
 	for i := 0; i < length; i++ {
+
 		for d := 0; d < NbDims; d++ {
 			gid := grad[i][d]
 			sid := tsne.ystep[i][d]
@@ -100,23 +132,30 @@ func (tsne *TSne) Step() float64 {
 				momval = 0.5
 			}
 			newsid := momval*sid - epsilon*tsne.gains[i][d]*grad[i][d]
+			if verbose {
+				//fmt.Printf("momval * sid - eps * gains * grad =\t %v * %v - %v * %v*%v = \t %v\n", momval, sid, epsilon, tsne.gains[i][d], grad[i][d], newsid)
+			}
 			tsne.ystep[i][d] = newsid // remember the step we took
 			// step!
 			tsne.Solution[i][d] += newsid
 			ymean[d] += tsne.Solution[i][d] // accumulate mean so that we can center later
 		}
 	}
+
 	// reproject Y to be zero mean
 	for i := 0; i < length; i++ {
 		for d := 0; d < NbDims; d++ {
 			tsne.Solution[i][d] -= ymean[d] / float64(length)
 		}
 	}
+	if verbose {
+		fmt.Println("Solution", tsne.Solution[0])
+	}
 	return cost
 }
 
 // return cost and gradient, given an arrangement
-func (tsne *TSne) costGrad(Y []Point) (cost float64, grad []Point) {
+func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point) {
 	length := tsne.length
 	P := tsne.probas
 	pmul := 1.0
@@ -155,18 +194,44 @@ func (tsne *TSne) costGrad(Y []Point) (cost float64, grad []Point) {
 				grad[i][d] += premult * (Y[i][d] - Y[j][d])
 			}
 		}
+		if verbose && i == 0 {
+			fmt.Println("tsne grad:", grad[i][0], grad[i][1])
+		}
 	}
 
 	//Now we consider the second part of the cost function.
 	//Would probably be more efficient to add it to the previous set of calculations, but for now we have it separate
 	if tsne.PrevSolution != nil {
 		for i := 0; i < length; i++ {
-			//We need to divide prevDists by variance somehow, but we don't calculate that explicitly? So we ignore it for now...
+
+			//If no movement in the high dim space, then do nothing for now
+			if math.Abs(tsne.prevDists[i]) < almost_zero {
+				if verbose && i == 0 {
+					fmt.Println("time cost 0")
+				}
+				continue
+			} else {
+			}
+
+			//distance between y_i^t and y_i^{t+1}
 			yPrevDists := (Y[i][0]-tsne.PrevSolution[i][0])*(Y[i][0]-tsne.PrevSolution[i][0]) + (Y[i][1]-tsne.PrevSolution[i][1])*(Y[i][1]-tsne.PrevSolution[i][1])
-			//fmt.Printf("xDist: %v\t yDist: %v\tRatio: %v\n", yPrevDists, tsne.prevDists[i], tsne.prevDists[i]/yPrevDists)
-			cost += 1 - math.Exp(tsne.prevDists[i]-yPrevDists)
+
+			//Same coeff for cost and the gradient in all dims
+			coeff := 1.0                     //tsne.vars[i] * sqrt_two //sigma of qi = 1/sqrt(2), so sigma_pi / sigma_qi = sigma_pi * sqrt(2)
+			coeff /= (K * tsne.prevDists[i]) //Safe to divide
+
+			cost += (coeff*yPrevDists - 1) * alpha //* ((1000.0 - float64(tsne.iter)) / 1000.0)
+
 			for d := 0; d < NbDims; d++ {
-				grad[i][d] += -2.0 * (Y[i][d] - tsne.PrevSolution[i][d]) * math.Exp(tsne.prevDists[i]/15.0-yPrevDists/2.0)
+				grad[i][d] += pmul * 2.0 * coeff * (Y[i][d] - tsne.PrevSolution[i][d]) * alpha
+				if math.IsNaN(grad[i][d]) {
+					fmt.Println("NaN gradient: ", grad[i])
+					fmt.Printf("2 * coeff * ( yPrev - Y )\t=  2 * %v * (%v - %v) \n", coeff, Y[i][d], tsne.PrevSolution[i][d])
+					return cost, nil
+				}
+			}
+			if verbose && i == 0 {
+				fmt.Println("time grad", alpha*pmul*2.0*coeff*(Y[i][0]-tsne.PrevSolution[i][0]), alpha*pmul*2.0*coeff*(Y[i][1]-tsne.PrevSolution[i][1]))
 			}
 		}
 	}
@@ -174,7 +239,7 @@ func (tsne *TSne) costGrad(Y []Point) (cost float64, grad []Point) {
 }
 
 // NormalizeSolution makes all values from the solution in the interval [0; 1].
-func (tsne *TSne) NormalizeSolution() {
+func (tsne *TSne) NormalizeSolution() []Point {
 	var mins [NbDims]float64
 	var maxs [NbDims]float64
 	for i, pt := range tsne.Solution {
@@ -187,9 +252,14 @@ func (tsne *TSne) NormalizeSolution() {
 			}
 		}
 	}
+
+	res := make([]Point, len(tsne.Solution))
+
 	for i, pt := range tsne.Solution {
 		for j, val := range pt {
-			tsne.Solution[i][j] = (val - mins[j]) / (maxs[j] - mins[j])
+			res[i][j] = (val - mins[j]) / (maxs[j] - mins[j])
+			//tsne.Solution[i][j] = (val - mins[j]) / (maxs[j] - mins[j])
 		}
 	}
+	return res
 }
