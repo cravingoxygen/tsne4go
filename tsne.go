@@ -194,7 +194,7 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 				grad[i][d] += premult * (Y[i][d] - Y[j][d])
 			}
 		}
-		if verbose && i == 0 {
+		if verbose && i == 1 {
 			fmt.Println("tsne grad:", grad[i][0], grad[i][1])
 		}
 	}
@@ -202,6 +202,14 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 	//Now we consider the second part of the cost function.
 	//Would probably be more efficient to add it to the previous set of calculations, but for now we have it separate
 	if tsne.PrevSolution != nil {
+
+		//Find the edges of the rectangle containing all the Y points so that we can normalize
+		mins, maxs := tsne.GetNormalizationBounds()
+		var dists [NbDims]float64
+		for d := range dists {
+			dists[d] = (maxs[d] - mins[d]) //* (maxs[d] - mins[d])
+		}
+
 		for i := 0; i < length; i++ {
 
 			//If no movement in the high dim space, then do nothing for now
@@ -228,7 +236,9 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 			}
 
 			for d := 0; d < NbDims; d++ {
-				grad[i][d] += pmul * 2.0 * coeff * (Y[i][d] - tsne.PrevSolution[i][d]) * sign
+				gradi := pmul * 2.0 * coeff * (Y[i][d] - tsne.PrevSolution[i][d]) * sign
+				gradi /= dists[d]
+				grad[i][d] += gradi
 
 				if math.IsNaN(grad[i][d]) {
 					fmt.Println("NaN gradient: ", grad[i])
@@ -236,8 +246,8 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 					return cost, nil
 				}
 			}
-			if verbose && i == 0 {
-				fmt.Println("time grad", alpha*pmul*2.0*coeff*(Y[i][0]-tsne.PrevSolution[i][0]), alpha*pmul*2.0*coeff*(Y[i][1]-tsne.PrevSolution[i][1]))
+			if verbose && i == 1 {
+				fmt.Println("time grad", pmul*2.0*coeff*(Y[i][0]-tsne.PrevSolution[i][0])*sign, pmul*2.0*coeff*(Y[i][1]-tsne.PrevSolution[i][1])*sign)
 			}
 		}
 	}
@@ -246,18 +256,7 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 
 // NormalizeSolution makes all values from the solution in the interval [0; 1].
 func (tsne *TSne) NormalizeSolution() []Point {
-	var mins [NbDims]float64
-	var maxs [NbDims]float64
-	for i, pt := range tsne.Solution {
-		for j, val := range pt {
-			if i == 0 || val < mins[j] {
-				mins[j] = val
-			}
-			if i == 0 || val > maxs[j] {
-				maxs[j] = val
-			}
-		}
-	}
+	mins, maxs := tsne.GetNormalizationBounds()
 
 	res := make([]Point, len(tsne.Solution))
 
@@ -268,4 +267,18 @@ func (tsne *TSne) NormalizeSolution() []Point {
 		}
 	}
 	return res
+}
+
+func (tsne *TSne) GetNormalizationBounds() (mins, maxs [NbDims]float64) {
+	for i, pt := range tsne.Solution {
+		for j, val := range pt {
+			if i == 0 || val < mins[j] {
+				mins[j] = val
+			}
+			if i == 0 || val > maxs[j] {
+				maxs[j] = val
+			}
+		}
+	}
+	return mins, maxs
 }
