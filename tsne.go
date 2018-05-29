@@ -15,7 +15,7 @@ const (
 	// NbDims is the number of dimensions in the target space, typically 2 or 3.
 	NbDims      int = 2
 	K               = 1.0
-	alpha           = 10.0
+	alpha           = 1.0
 	almost_zero     = 0.000001
 )
 
@@ -81,7 +81,7 @@ func New(x Distancer, xPrev Distancer, yPrev []Point, meta []interface{}) *TSne 
 
 	//Don't randomly re-initialize if previous points are known
 	if yPrev != nil {
-		tsne.Solution = copyPoints(yPrev)
+		tsne.Solution = randn2d(length) //copyPoints(yPrev)
 	} else {
 		tsne.Solution = randn2d(length)
 	}
@@ -205,25 +205,31 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 		for i := 0; i < length; i++ {
 
 			//If no movement in the high dim space, then do nothing for now
-			if math.Abs(tsne.prevDists[i]) < almost_zero {
+			/*if math.Abs(tsne.prevDists[i]) < almost_zero {
 				if verbose && i == 0 {
 					fmt.Println("time cost 0")
 				}
 				continue
 			} else {
-			}
+			}*/
 
 			//distance between y_i^t and y_i^{t+1}
 			yPrevDists := (Y[i][0]-tsne.PrevSolution[i][0])*(Y[i][0]-tsne.PrevSolution[i][0]) + (Y[i][1]-tsne.PrevSolution[i][1])*(Y[i][1]-tsne.PrevSolution[i][1])
 
 			//Same coeff for cost and the gradient in all dims
-			coeff := 1.0                     //tsne.vars[i] * sqrt_two //sigma of qi = 1/sqrt(2), so sigma_pi / sigma_qi = sigma_pi * sqrt(2)
-			coeff /= (K * tsne.prevDists[i]) //Safe to divide
+			coeff := 1.0                           //tsne.vars[i] * sqrt_two //sigma of qi = 1/sqrt(2), so sigma_pi / sigma_qi = sigma_pi * sqrt(2)
+			coeff /= (K * (tsne.prevDists[i] + 1)) //Safe to divide
 
-			cost += (coeff*yPrevDists - 1) * alpha //* ((1000.0 - float64(tsne.iter)) / 1000.0)
+			timeCost := coeff*(yPrevDists) - 1 //* ((1000.0 - float64(tsne.iter)) / 1000.0)
+			cost += math.Abs(timeCost)
+			sign := 1.0
+			if timeCost < 0 {
+				sign *= -1
+			}
 
 			for d := 0; d < NbDims; d++ {
-				grad[i][d] += pmul * 2.0 * coeff * (Y[i][d] - tsne.PrevSolution[i][d]) * alpha
+				grad[i][d] += pmul * 2.0 * coeff * (Y[i][d] - tsne.PrevSolution[i][d]) * sign
+
 				if math.IsNaN(grad[i][d]) {
 					fmt.Println("NaN gradient: ", grad[i])
 					fmt.Printf("2 * coeff * ( yPrev - Y )\t=  2 * %v * (%v - %v) \n", coeff, Y[i][d], tsne.PrevSolution[i][d])
@@ -258,7 +264,7 @@ func (tsne *TSne) NormalizeSolution() []Point {
 	for i, pt := range tsne.Solution {
 		for j, val := range pt {
 			res[i][j] = (val - mins[j]) / (maxs[j] - mins[j])
-			//tsne.Solution[i][j] = (val - mins[j]) / (maxs[j] - mins[j])
+			tsne.Solution[i][j] = (val - mins[j]) / (maxs[j] - mins[j])
 		}
 	}
 	return res
