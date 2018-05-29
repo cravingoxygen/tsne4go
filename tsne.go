@@ -205,10 +205,13 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 
 		//Find the edges of the rectangle containing all the Y points so that we can normalize
 		mins, maxs := tsne.GetNormalizationBounds()
+		totDist := 0.0
 		var dists [NbDims]float64
 		for d := range dists {
 			dists[d] = (maxs[d] - mins[d]) //* (maxs[d] - mins[d])
+			totDist += dists[d]
 		}
+		fmt.Println(totDist)
 
 		for i := 0; i < length; i++ {
 
@@ -228,16 +231,17 @@ func (tsne *TSne) costGrad(Y []Point, verbose bool) (cost float64, grad []Point)
 			coeff := 1.0                           //tsne.vars[i] * sqrt_two //sigma of qi = 1/sqrt(2), so sigma_pi / sigma_qi = sigma_pi * sqrt(2)
 			coeff /= (K * (tsne.prevDists[i] + 1)) //Safe to divide
 
-			timeCost := coeff*(yPrevDists) - 1 //* ((1000.0 - float64(tsne.iter)) / 1000.0)
+			timeCost := coeff*(yPrevDists/totDist) - 1 //* ((1000.0 - float64(tsne.iter)) / 1000.0)
+			timeCostWithout := coeff*(yPrevDists) - 1
 			cost += math.Abs(timeCost)
 			sign := 1.0
-			if timeCost < 0 {
+			if timeCostWithout < 0 {
 				sign *= -1
 			}
 
 			for d := 0; d < NbDims; d++ {
 				gradi := pmul * 2.0 * coeff * (Y[i][d] - tsne.PrevSolution[i][d]) * sign
-				gradi /= dists[d]
+				gradi /= totDist
 				grad[i][d] += gradi
 
 				if math.IsNaN(grad[i][d]) {
